@@ -95,6 +95,15 @@ class MLService:
             except Exception as e:
                 print(f"[MLService] Prediction error: {e}")
 
+        # Physical sanity safeguard: If real-world room telemetry is within standard safe thermal & clean air limits,
+        # it must never be classified as High Risk.
+        if temp >= 19.0 and temp <= 26.5 and ppm < 500.0 and humidity >= 30.0 and humidity <= 65.0:
+            if risk_class == 2:
+                risk_class = 0
+                probs["Safe"] = max(probs.get("Safe", 0.0), 0.96)
+                probs["High Risk"] = 0.01
+                confidence = probs["Safe"]
+
         labels = {0: "Safe", 1: "Moderate", 2: "High Risk"}
         risk_label = labels.get(risk_class, "Safe")
 

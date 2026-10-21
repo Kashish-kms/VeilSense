@@ -8,6 +8,7 @@ import {
   fetchDeviceStatus,
   actuateFan,
   requestRiskPrediction,
+  determineEnvironmentalRisk,
   WS_BASE,
   MOCK_LATEST_READING
 } from '@/lib/api';
@@ -122,14 +123,57 @@ export default function DashboardPage() {
         const newTemp = +(prev.temperature + drift).toFixed(2);
         const newHum = +(prev.humidity + (Math.random() - 0.5) * 0.2).toFixed(2);
         const motion = Math.random() < 0.35 ? 1 : 0;
-        const newPpm = +(prev.air_quality_ppm + (motion ? 2.5 : -1.2)).toFixed(1);
-        const clampedPpm = Math.max(380, Math.min(1100, newPpm));
+        const newPpm = +(prev.air_quality_ppm + (motion ? 1.5 : -1.0)).toFixed(1);
+        const clampedPpm = Math.max(380, Math.min(800, newPpm));
+
+        const { risk_level: calculatedRisk, fan_active: calculatedFan } = determineEnvironmentalRisk(newTemp, newHum, clampedPpm);
+
+        if (autoMode) {
+          setFanState(calculatedFan);
+        }
+
+        // Dynamically update prediction gauge if not connected to live WS
+        setPrediction((old) => ({
+          risk_level: calculatedRisk,
+          risk_label: calculatedRisk === 2 ? 'High Risk' : calculatedRisk === 1 ? 'Moderate' : 'Safe',
+          confidence: calculatedRisk === 0 ? 0.98 : (calculatedRisk === 1 ? 0.91 : 0.95),
+          probabilities: {
+            Safe: calculatedRisk === 0 ? 0.98 : 0.04,
+            Moderate: calculatedRisk === 1 ? 0.88 : (calculatedRisk === 0 ? 0.02 : 0.08),
+            'High Risk': calculatedRisk === 2 ? 0.92 : 0.01
+          },
+          top_contributing_factors: [
+            {
+              factor: clampedPpm >= 850 ? 'Severe Air Stagnation (VOC Spike)' : (clampedPpm >= 500 ? 'Moderate Air Stagnation' : 'Clean Ambient Air (Sub-500 PPM)'),
+              impact: clampedPpm >= 850 ? 'High' : (clampedPpm >= 500 ? 'Medium' : 'Low'),
+              contribution: '48%'
+            },
+            {
+              factor: (newTemp > 28 || newTemp < 18) ? 'Thermal Comfort Deviation' : 'Optimal Thermal Comfort',
+              impact: (newTemp > 28 || newTemp < 18) ? 'High' : 'Low',
+              contribution: '28%'
+            },
+            {
+              factor: motion ? 'Active Room Occupancy' : 'Unoccupied Room Dynamics',
+              impact: 'Low',
+              contribution: '24%'
+            }
+          ],
+          recommendations: calculatedRisk === 2
+            ? ['Activate high-flow smart ventilation immediately.', 'Inspect localized VOC or smoke source.']
+            : calculatedRisk === 1
+            ? ['Schedule intermittent ventilation cycle.', 'Ensure room temperature remains between 21-24°C.']
+            : ['Room environmental quality is optimal. Maintain low-power eco ventilation.']
+        }));
+
         return {
           ...prev,
           temperature: newTemp,
           humidity: newHum,
           air_quality_ppm: clampedPpm,
           motion_detected: motion,
+          risk_level: calculatedRisk,
+          fan_active: autoMode ? calculatedFan : prev.fan_active,
           timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
         };
       });

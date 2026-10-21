@@ -55,6 +55,19 @@ export async function fetchLatestReading(): Promise<TelemetryReading> {
   }
 }
 
+export function determineEnvironmentalRisk(temp: number, hum: number, ppm: number): { risk_level: number; risk_label: 'Safe' | 'Moderate' | 'High Risk'; fan_active: number } {
+  // Severe air hazard or extreme temperature discomfort
+  if (ppm >= 850 || temp >= 32.0 || temp <= 15.0 || (hum >= 75 && ppm >= 700)) {
+    return { risk_level: 2, risk_label: 'High Risk', fan_active: 1 };
+  }
+  // Moderate air stagnation or mild thermal discomfort
+  if (ppm >= 500 || hum > 65 || hum < 30 || temp > 27.5 || temp < 18.5) {
+    return { risk_level: 1, risk_label: 'Moderate', fan_active: 0 };
+  }
+  // Safe / optimal ambient room condition (e.g. 20-25°C, 40-60% RH, <500 PPM)
+  return { risk_level: 0, risk_label: 'Safe', fan_active: 0 };
+}
+
 export async function fetchReadings(
   timeRange = '24h',
   limit = 100,
@@ -75,23 +88,32 @@ export async function fetchReadings(
     if (!res.ok) throw new Error('Failed to fetch readings');
     return await res.json();
   } catch (err) {
-    // Generate synthetic series for demo mode
+    // Generate realistic privacy-preserving sensor series for demo mode / offline preview
     const items: TelemetryReading[] = [];
     const now = Date.now();
     for (let i = 0; i < limit; i++) {
       const ts = new Date(now - i * 30000).toISOString().replace('T', ' ').substring(0, 19);
+      const temp = +(22.2 + Math.sin(i / 12) * 1.2 + (Math.random() - 0.5) * 0.3).toFixed(2);
+      const hum = +(48.0 - Math.sin(i / 12) * 2.5 + (Math.random() - 0.5) * 0.6).toFixed(2);
+      // Realistic indoor baseline (410 - 450 PPM); occasional simulated elevation in past window (i=35..38)
+      const isHistoricalPeak = i >= 35 && i <= 38;
+      const ppm = +(isHistoricalPeak ? 860.0 + (i - 35) * 20 : 416.0 + (i % 8) * 3 + (Math.random() - 0.5) * 2).toFixed(1);
+      
+      const { risk_level, fan_active } = determineEnvironmentalRisk(temp, hum, ppm);
+      const is_outlier = (i === 18) ? 1 : 0;
+
       items.push({
         id: 1000 - i,
         timestamp: ts,
-        temperature: +(22.0 + Math.sin(i / 10) * 2 + Math.random() * 0.4).toFixed(2),
-        humidity: +(48.0 - Math.sin(i / 10) * 4 + Math.random() * 0.8).toFixed(2),
-        air_quality_ppm: +(420.0 + (i % 20) * 12 + Math.random() * 5).toFixed(1),
+        temperature: temp,
+        humidity: hum,
+        air_quality_ppm: ppm,
         motion_detected: i % 4 === 0 ? 1 : 0,
-        motion_count: i % 4 === 0 ? Math.floor(Math.random() * 8) + 2 : 0,
-        fan_active: i % 25 === 0 ? 1 : 0,
-        risk_level: i % 25 === 0 ? 2 : (i % 8 === 0 ? 1 : 0),
-        risk_confidence: 0.95,
-        is_outlier: 0,
+        motion_count: i % 4 === 0 ? Math.floor(Math.random() * 6) + 1 : 0,
+        fan_active: fan_active,
+        risk_level: risk_level,
+        risk_confidence: risk_level === 0 ? 0.98 : (risk_level === 1 ? 0.91 : 0.96),
+        is_outlier: is_outlier,
         device_id: 'ESP32-NODE-01'
       });
     }
@@ -266,45 +288,61 @@ export async function requestRiskPrediction(params: {
   consecutive_occupied_minutes?: number;
 }): Promise<RiskPrediction> {
   try {
-    const res = await fetch(`${API_BASE}/api/predict`, {
+    // Attempt standard route first, then models subpath
+    let res = await fetch(`${API_BASE}/api/predict`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params)
     });
+    if (!res.ok) {
+      res = await fetch(`${API_BASE}/api/models/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+    }
     if (!res.ok) throw new Error('Prediction API error');
     return await res.json();
   } catch {
-    // Client-side fallback calculation
+    // Client-side fallback calculation matching physical rules & ML classifier
     const ppm = params.air_quality_ppm;
     const temp = params.temperature;
-    let risk_level = 0;
-    let label = 'Safe';
-    if (ppm >= 850 || temp >= 31 || temp <= 16) {
-      risk_level = 2;
-      label = 'High Risk';
-    } else if (ppm >= 500 || temp > 27.5 || params.humidity > 65) {
-      risk_level = 1;
-      label = 'Moderate';
-    }
+    const hum = params.humidity;
+    
+    const { risk_level, risk_label: label } = determineEnvironmentalRisk(temp, hum, ppm);
+    const confidence = risk_level === 0 ? 0.98 : (risk_level === 1 ? 0.92 : 0.96);
+
     return {
       risk_level,
       risk_label: label,
-      confidence: 0.95,
+      confidence,
       probabilities: {
-        Safe: risk_level === 0 ? 0.94 : 0.05,
-        Moderate: risk_level === 1 ? 0.88 : 0.1,
-        'High Risk': risk_level === 2 ? 0.92 : 0.02
+        Safe: risk_level === 0 ? 0.98 : (risk_level === 1 ? 0.05 : 0.02),
+        Moderate: risk_level === 1 ? 0.92 : (risk_level === 0 ? 0.02 : 0.06),
+        'High Risk': risk_level === 2 ? 0.92 : 0.01
       },
       top_contributing_factors: [
-        { factor: ppm > 600 ? 'Elevated Gas Concentration' : 'Clean Ambient Air', impact: ppm > 600 ? 'High' : 'Low', contribution: '48%' },
-        { factor: 'Thermal Comfort Envelope', impact: 'Medium', contribution: '28%' },
-        { factor: 'Room Occupancy Dynamics', impact: 'Medium', contribution: '24%' }
+        {
+          factor: ppm >= 850 ? 'Severe Air Stagnation (VOC Spike)' : (ppm >= 500 ? 'Moderate Air Stagnation' : 'Clean Ambient Air (Sub-500 PPM)'),
+          impact: ppm >= 850 ? 'High' : (ppm >= 500 ? 'Medium' : 'Low'),
+          contribution: '48%'
+        },
+        {
+          factor: (temp > 28 || temp < 18) ? 'Thermal Comfort Deviation' : 'Optimal Thermal Envelope',
+          impact: (temp > 28 || temp < 18) ? 'High' : 'Low',
+          contribution: '28%'
+        },
+        {
+          factor: params.motion_detected ? 'Active Room Occupancy' : 'Unoccupied Space',
+          impact: 'Low',
+          contribution: '24%'
+        }
       ],
       recommendations: risk_level === 2
         ? ['Activate high-flow smart ventilation immediately.', 'Inspect localized VOC or smoke source.']
         : risk_level === 1
         ? ['Schedule intermittent ventilation cycle.', 'Ensure room temperature remains between 21-24°C.']
-        : ['Optimal environmental balance.', 'Keep eco ventilation active.']
+        : ['Room environmental quality is optimal.', 'Maintain low-power eco ventilation.']
     };
   }
 }

@@ -43,6 +43,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .schemas import PredictRequest, PredictResponse
+from .ml_service import ml_service
+
 # Mount API Routers
 app.include_router(auth_router)
 app.include_router(readings_router)
@@ -50,6 +53,18 @@ app.include_router(model_router)
 app.include_router(eda_router)
 app.include_router(device_router)
 app.include_router(alerts_router)
+
+@app.post("/api/predict", response_model=PredictResponse, tags=["models"])
+def predict_risk_alias(req: PredictRequest):
+    occ_mins = req.consecutive_occupied_minutes if req.consecutive_occupied_minutes is not None else 15.0
+    res = ml_service.predict_risk(
+        temp=req.temperature,
+        humidity=req.humidity,
+        ppm=req.air_quality_ppm,
+        motion=req.motion_detected,
+        occupancy_persistence=occ_mins / 0.5
+    )
+    return PredictResponse(**res)
 
 @app.get("/")
 def root():

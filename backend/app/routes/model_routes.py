@@ -37,11 +37,12 @@ def retrain_model(current_user: dict = Depends(get_current_user)):
 
 @router.post("/predict", response_model=PredictResponse)
 def predict_risk_endpoint(req: PredictRequest):
+    occ_mins = req.consecutive_occupied_minutes if req.consecutive_occupied_minutes is not None else 15.0
     res = ml_service.predict_risk(
         temp=req.temperature,
         humidity=req.humidity,
         ppm=req.air_quality_ppm,
         motion=req.motion_detected,
-        occupancy_persistence=req.consecutive_occupied_minutes / 0.5 # 30s steps
+        occupancy_persistence=occ_mins / 0.5 # 30s steps
     )
     return PredictResponse(**res)
