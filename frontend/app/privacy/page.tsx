@@ -315,7 +315,7 @@ export default function PrivacyPage() {
                 <th className="py-3 px-4 font-mono text-cyan-neon">
                   VeilSense Zero-Intrusion Model
                 </th>
-                <th className="py-3 px-4 font-mono text-emerald-400">
+                <th className="py-3 px-4 font-mono text-emerald-400 text-center w-48 min-w-[192px]">
                   Security Guarantee
                 </th>
               </tr>
@@ -335,9 +335,9 @@ export default function PrivacyPage() {
                   <td className="py-4 px-4 text-cyan-neon font-sans font-medium leading-snug">
                     {row.veilsense}
                   </td>
-                  <td className="py-4 px-4">
+                  <td className="py-4 px-4 text-center align-middle">
                     <span
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${verdictStyles[row.verdictColor]}`}
+                      className={`inline-block px-3 py-1.5 rounded-full text-[11px] font-bold whitespace-nowrap ${verdictStyles[row.verdictColor]}`}
                     >
                       {row.verdict}
                     </span>
